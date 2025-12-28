@@ -1,38 +1,37 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { createPageUrl } from '../utils';
-import { elevesAPI, busAPI, trajetsAPI, tuteursAPI, inscriptionsAPI, notificationsAPI } from '../services/apiService';
+import { demandesAPI, elevesAPI, busAPI, trajetsAPI, notificationsAPI, facturesAPI, inscriptionsAPI } from '../services/apiService';
 import { motion } from 'framer-motion';
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { 
   ClipboardList, ArrowLeft, Search, CheckCircle, XCircle, 
-  Eye, User, Bus, MapPin, Filter, Calendar
+  Eye, User, Bus, MapPin, Filter, Calendar, Info, FileText
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
 
 export default function AdminInscriptions() {
   const navigate = useNavigate();
+  const [demandes, setDemandes] = useState([]);
   const [eleves, setEleves] = useState([]);
   const [buses, setBuses] = useState([]);
   const [trajets, setTrajets] = useState([]);
   const [inscriptions, setInscriptions] = useState([]);
-  const [tuteurs, setTuteurs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('all');
-  const [selectedEleve, setSelectedEleve] = useState(null);
-  const [showVerifyModal, setShowVerifyModal] = useState(false);
-  const [showInscriptionModal, setShowInscriptionModal] = useState(false);
+  const [statusFilter, setStatusFilter] = useState('En attente');
+  const [selectedDemande, setSelectedDemande] = useState(null);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [showRefuseModal, setShowRefuseModal] = useState(false);
   const [availableBuses, setAvailableBuses] = useState([]);
+  const [montantFacture, setMontantFacture] = useState(500);
+  const [motifRefus, setMotifRefus] = useState('');
   const [error, setError] = useState(null);
-  const [inscriptionForm, setInscriptionForm] = useState({
-    montant_mensuel: 500,
-    date_debut: format(new Date(), 'yyyy-MM-dd'),
-    date_fin: format(new Date(new Date().setMonth(new Date().getMonth() + 10)), 'yyyy-MM-dd')
-  });
+  const [processing, setProcessing] = useState(false);
 
   useEffect(() => {
     const session = localStorage.getItem('admin_session');
@@ -48,41 +47,37 @@ export default function AdminInscriptions() {
     setError(null);
     
     try {
-      const [elevesRes, busesRes, trajetsRes, inscriptionsRes, tuteursRes] = await Promise.all([
+      const [demandesRes, elevesRes, busesRes, trajetsRes, inscriptionsRes] = await Promise.all([
+        demandesAPI.getAll(),
         elevesAPI.getAll(),
         busAPI.getAll(),
         trajetsAPI.getAll(),
-        inscriptionsAPI.getAll(),
-        tuteursAPI.getAll()
+        inscriptionsAPI.getAll()
       ]);
       
-      // Extraire les données avec gestion de différents formats de réponse
+      const demandesArray = demandesRes?.data || demandesRes || [];
       const elevesArray = elevesRes?.data || elevesRes || [];
       const busesArray = busesRes?.data || busesRes || [];
       const trajetsArray = trajetsRes?.data || trajetsRes || [];
       const inscriptionsArray = inscriptionsRes?.data || inscriptionsRes || [];
-      const tuteursArray = tuteursRes?.data || tuteursRes || [];
       
-      // Enrichir les élèves avec les infos du tuteur et de l'inscription
-      const elevesWithDetails = elevesArray.map(e => {
-        const tuteur = tuteursArray.find(t => t.id === e.tuteur_id);
-        const inscription = inscriptionsArray.find(i => i.eleve_id === e.id && i.statut !== 'Terminée');
-        const bus = inscription?.bus_id ? busesArray.find(b => b.id === inscription.bus_id) : null;
-        
+      // Filtrer uniquement les demandes d'inscription
+      const demandesInscription = demandesArray.filter(d => d.type_demande === 'inscription');
+      
+      // Enrichir les demandes avec les infos de l'élève
+      const demandesWithDetails = demandesInscription.map(d => {
+        const eleve = elevesArray.find(e => e.id === d.eleve_id);
         return {
-          ...e,
-          tuteur,
-          inscription,
-          bus,
-          statut_inscription: inscription?.statut || 'En attente'
+          ...d,
+          eleve
         };
       });
       
-      setEleves(elevesWithDetails);
+      setDemandes(demandesWithDetails);
+      setEleves(elevesArray);
       setBuses(busesArray);
       setTrajets(trajetsArray);
       setInscriptions(inscriptionsArray);
-      setTuteurs(tuteursArray);
     } catch (err) {
       console.error('Erreur lors du chargement:', err);
       setError('Erreur lors du chargement des données: ' + err.message);
@@ -91,187 +86,180 @@ export default function AdminInscriptions() {
     }
   };
 
-  const handleValidate = async (eleve) => {
-    setSelectedEleve(eleve);
-    setShowInscriptionModal(true);
+  const parseDescription = (description) => {
+    if (!description) return {};
+    try {
+      if (typeof description === 'string') {
+        return JSON.parse(description);
+      }
+      return description;
+    } catch (e) {
+      return {};
+    }
   };
 
-  const handleCreateInscription = async () => {
-    if (!selectedEleve) return;
+  const handleViewDetails = (demande) => {
+    setSelectedDemande(demande);
+    const desc = parseDescription(demande.description);
+    const zoneEleve = desc.zone || demande.eleve?.adresse || '';
     
-    setError(null);
-    
-    try {
-      // Créer l'inscription avec tous les champs requis
-      const inscriptionData = {
-        eleve_id: selectedEleve.id,
-        bus_id: selectedEleve.bus?.id || null,
-        date_debut: inscriptionForm.date_debut,
-        date_fin: inscriptionForm.date_fin,
-        montant_mensuel: parseFloat(inscriptionForm.montant_mensuel),
-        statut: 'Active'
-      };
+    // Filtrer les bus disponibles pour la zone de l'élève
+    const busesDisponibles = buses.map(bus => {
+      const trajet = trajets.find(t => t.id === bus.trajet_id);
+      let zonesTrajet = [];
       
-      const response = await inscriptionsAPI.create(inscriptionData);
-      
-      if (response.success) {
-        // Mettre à jour le statut de l'élève
-        await elevesAPI.update(selectedEleve.id, {
-          statut: 'Actif'
-        });
-        
-        // Envoyer notification au tuteur
-        if (selectedEleve.tuteur_id) {
-          await notificationsAPI.create({
-            destinataire_id: selectedEleve.tuteur_id,
-            destinataire_type: 'tuteur',
-            titre: 'Inscription validée',
-            message: `L'inscription de ${selectedEleve.prenom} ${selectedEleve.nom} a été validée. Montant mensuel: ${inscriptionForm.montant_mensuel} DH.`,
-            type: 'info',
-            date: new Date().toISOString()
-          });
+      if (trajet?.zones) {
+        if (typeof trajet.zones === 'string') {
+          try {
+            zonesTrajet = JSON.parse(trajet.zones);
+          } catch {
+            zonesTrajet = trajet.zones.split(',').map(z => z.trim());
+          }
+        } else if (Array.isArray(trajet.zones)) {
+          zonesTrajet = trajet.zones;
         }
-        
-        setShowInscriptionModal(false);
-        setSelectedEleve(null);
-        await loadData();
-      }
-    } catch (err) {
-      console.error('Erreur lors de la validation:', err);
-      setError('Erreur lors de la validation de l\'inscription: ' + err.message);
-    }
-  };
-
-  const handleRefuse = async (eleve, motif) => {
-    if (!motif) return;
-    
-    setError(null);
-    
-    try {
-      // Si une inscription existe, la marquer comme terminée
-      if (eleve.inscription) {
-        await inscriptionsAPI.update(eleve.inscription.id, {
-          statut: 'Terminée'
-        });
       }
       
-      // Mettre à jour le statut de l'élève
-      await elevesAPI.update(eleve.id, {
-        statut: 'Inactif'
-      });
+      // Vérifier si la zone de l'élève correspond aux zones du trajet
+      const zoneMatch = !zoneEleve || zonesTrajet.some(zt => 
+        zt.toLowerCase().includes(zoneEleve.toLowerCase()) || 
+        zoneEleve.toLowerCase().includes(zt.toLowerCase())
+      );
       
-      // Envoyer notification au tuteur
-      if (eleve.tuteur_id) {
-        await notificationsAPI.create({
-          destinataire_id: eleve.tuteur_id,
-          destinataire_type: 'tuteur',
-          titre: 'Inscription refusée',
-          message: `L'inscription de ${eleve.prenom} ${eleve.nom} a été refusée. Motif: ${motif}`,
-          type: 'alerte',
-          date: new Date().toISOString()
-        });
-      }
-      
-      await loadData();
-    } catch (err) {
-      console.error('Erreur lors du refus:', err);
-      setError('Erreur lors du refus de l\'inscription: ' + err.message);
-    }
-  };
-
-  const handleVerifyZone = (eleve) => {
-    setSelectedEleve(eleve);
-    
-    // Calculer les places restantes pour chaque bus
-    const busesWithCapacity = buses.map(bus => {
       // Compter les inscriptions actives pour ce bus
       const elevesInBus = inscriptions.filter(i => 
         i.bus_id === bus.id && (i.statut === 'Active' || i.statut === 'Suspendue')
       ).length;
       
-      const trajet = trajets.find(t => t.id === bus.trajet_id);
-      
       return {
         ...bus,
         trajet,
+        zonesTrajet,
         placesRestantes: bus.capacite - elevesInBus,
-        elevesInscrits: elevesInBus
+        elevesInscrits: elevesInBus,
+        zoneMatch
       };
     }).filter(bus => 
-      bus.statut === 'Actif' && bus.placesRestantes > 0
+      bus.statut === 'Actif' && 
+      bus.placesRestantes > 0 && 
+      (!zoneEleve || bus.zoneMatch) // Si une zone est spécifiée, filtrer par zone
     );
     
-    setAvailableBuses(busesWithCapacity);
-    setShowVerifyModal(true);
+    setAvailableBuses(busesDisponibles);
+    setShowDetailsModal(true);
   };
 
-  const handleAffectBus = async (busId) => {
-    if (!selectedEleve) return;
-    
+  const handleValidate = async (demande) => {
+    if (!selectedDemande) return;
+    setProcessing(true);
     setError(null);
     
     try {
-      const bus = buses.find(b => b.id === busId);
+      const desc = parseDescription(selectedDemande.description);
+      const montant = montantFacture || (desc.abonnement === 'Annuel' ? 4000 : 500);
       
-      if (selectedEleve.inscription) {
-        // Mettre à jour l'inscription existante
-        await inscriptionsAPI.update(selectedEleve.inscription.id, {
-          bus_id: busId,
-          statut: 'Active'
-        });
-      } else {
-        // Créer une nouvelle inscription
-        const inscriptionData = {
-          eleve_id: selectedEleve.id,
-          bus_id: busId,
-          date_debut: format(new Date(), 'yyyy-MM-dd'),
-          date_fin: format(new Date(new Date().setMonth(new Date().getMonth() + 10)), 'yyyy-MM-dd'),
-          montant_mensuel: 500
-        };
-        
-        await inscriptionsAPI.create(inscriptionData);
+      // Créer la facture
+      const factureResponse = await facturesAPI.create({
+        demande_id: selectedDemande.id,
+        eleve_id: selectedDemande.eleve_id,
+        tuteur_id: selectedDemande.tuteur_id,
+        montant: montant,
+        type_transport: desc.type_transport || ''
+      });
+      
+      if (!factureResponse.success) {
+        throw new Error('Erreur lors de la création de la facture');
       }
       
-      // Notifier le tuteur
-      if (selectedEleve.tuteur_id) {
-        await notificationsAPI.create({
-          destinataire_id: selectedEleve.tuteur_id,
-          destinataire_type: 'tuteur',
-          titre: 'Affectation au bus',
-          message: `${selectedEleve.prenom} ${selectedEleve.nom} a été affecté(e) au bus ${bus.numero}.`,
-          type: 'info',
-          date: new Date().toISOString()
-        });
-      }
+      const facture = factureResponse.data;
       
-      setShowVerifyModal(false);
-      setSelectedEleve(null);
+      // Mettre à jour le statut de la demande
+      await demandesAPI.traiter(selectedDemande.id, 'Approuvée', 'Demande approuvée - Facture générée');
+      
+      // Envoyer notification au tuteur avec la facture
+      await notificationsAPI.create({
+        destinataire_id: selectedDemande.tuteur_id,
+        destinataire_type: 'tuteur',
+        titre: 'Inscription validée - Facture disponible',
+        message: `Votre demande d'inscription pour ${selectedDemande.eleve?.prenom || ''} ${selectedDemande.eleve?.nom || ''} a été validée. Montant: ${montant} DH. Code de vérification: ${facture.code_verification}. Veuillez procéder au paiement.`,
+        type: 'info',
+        date: new Date().toISOString()
+      });
+      
+      setShowDetailsModal(false);
+      setSelectedDemande(null);
       await loadData();
     } catch (err) {
-      console.error('Erreur lors de l\'affectation:', err);
-      setError('Erreur lors de l\'affectation au bus: ' + err.message);
+      console.error('Erreur lors de la validation:', err);
+      setError('Erreur lors de la validation: ' + err.message);
+    } finally {
+      setProcessing(false);
     }
   };
 
-  const filteredEleves = eleves.filter(e => {
-    const matchSearch = 
-      e.nom?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      e.prenom?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      e.adresse?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      e.classe?.toLowerCase().includes(searchTerm.toLowerCase());
+  const handleRefuse = async () => {
+    if (!selectedDemande || !motifRefus.trim()) {
+      setError('Veuillez indiquer le motif du refus');
+      return;
+    }
     
-    const matchStatus = statusFilter === 'all' || e.statut === statusFilter;
+    setProcessing(true);
+    setError(null);
+    
+    try {
+      // Mettre à jour le statut de la demande
+      await demandesAPI.traiter(selectedDemande.id, 'Rejetée', motifRefus);
+      
+      // Mettre à jour le statut de l'élève si existe
+      if (selectedDemande.eleve_id) {
+        try {
+          await elevesAPI.update(selectedDemande.eleve_id, {
+            statut: 'Refusé'
+          });
+        } catch (e) {
+          console.warn('Erreur lors de la mise à jour de l\'élève:', e);
+        }
+      }
+      
+      // Envoyer notification au tuteur
+      await notificationsAPI.create({
+        destinataire_id: selectedDemande.tuteur_id,
+        destinataire_type: 'tuteur',
+        titre: 'Inscription refusée',
+        message: `Votre demande d'inscription pour ${selectedDemande.eleve?.prenom || ''} ${selectedDemande.eleve?.nom || ''} a été refusée. Motif: ${motifRefus}`,
+        type: 'alerte',
+        date: new Date().toISOString()
+      });
+      
+      setShowRefuseModal(false);
+      setSelectedDemande(null);
+      setMotifRefus('');
+      await loadData();
+    } catch (err) {
+      console.error('Erreur lors du refus:', err);
+      setError('Erreur lors du refus: ' + err.message);
+    } finally {
+      setProcessing(false);
+    }
+  };
+
+  const filteredDemandes = demandes.filter(d => {
+    const matchSearch = 
+      d.eleve?.nom?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.eleve?.prenom?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.eleve?.adresse?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      d.eleve?.classe?.toLowerCase().includes(searchTerm.toLowerCase());
+    
+    const matchStatus = statusFilter === 'all' || d.statut === statusFilter;
     
     return matchSearch && matchStatus;
   });
 
   const getStatusBadge = (statut) => {
     const styles = {
-      'Actif': 'bg-green-100 text-green-700',
-      'Inactif': 'bg-yellow-100 text-yellow-700',
-      'Active': 'bg-emerald-100 text-emerald-700',
-      'Suspendue': 'bg-orange-100 text-orange-700',
-      'Terminée': 'bg-gray-100 text-gray-700'
+      'En attente': 'bg-yellow-100 text-yellow-700',
+      'Approuvée': 'bg-green-100 text-green-700',
+      'Rejetée': 'bg-red-100 text-red-700'
     };
     return styles[statut] || 'bg-gray-100 text-gray-700';
   };
@@ -312,9 +300,11 @@ export default function AdminInscriptions() {
           <div className="p-6 bg-gradient-to-r from-blue-500 to-cyan-500">
             <h1 className="text-2xl font-bold text-white flex items-center gap-3">
               <ClipboardList className="w-7 h-7" />
-              Gestion des Inscriptions
+              Gestion des Demandes d'Inscription
             </h1>
-            <p className="text-blue-100 mt-1">{eleves.length} élève(s) • {inscriptions.filter(i => i.statut === 'Active').length} inscription(s) active(s)</p>
+            <p className="text-blue-100 mt-1">
+              {demandes.length} demande(s) d'inscription • {demandes.filter(d => d.statut === 'En attente').length} en attente
+            </p>
           </div>
 
           {/* Filters */}
@@ -336,8 +326,9 @@ export default function AdminInscriptions() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">Tous les statuts</SelectItem>
-                  <SelectItem value="Actif">Actif</SelectItem>
-                  <SelectItem value="Inactif">En attente</SelectItem>
+                  <SelectItem value="En attente">En attente</SelectItem>
+                  <SelectItem value="Approuvée">Approuvée</SelectItem>
+                  <SelectItem value="Rejetée">Rejetée</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -345,158 +336,227 @@ export default function AdminInscriptions() {
 
           {/* List */}
           <div className="divide-y divide-gray-100">
-            {filteredEleves.length === 0 ? (
+            {filteredDemandes.length === 0 ? (
               <div className="p-12 text-center text-gray-400">
                 <ClipboardList className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                <p>Aucune inscription trouvée</p>
+                <p>Aucune demande d'inscription trouvée</p>
               </div>
             ) : (
-              filteredEleves.map((eleve) => (
-                <div key={eleve.id} className="p-6 hover:bg-amber-50/50 transition-colors">
-                  <div className="flex flex-col lg:flex-row justify-between gap-4">
-                    <div className="flex items-start gap-4">
-                      <div className="w-14 h-14 rounded-2xl bg-blue-100 flex items-center justify-center flex-shrink-0">
-                        <User className="w-7 h-7 text-blue-500" />
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="font-semibold text-gray-800 text-lg">
-                          {eleve.nom} {eleve.prenom}
-                        </h3>
-                        <div className="flex flex-wrap gap-2 mt-1 text-sm text-gray-500">
-                          <span>{eleve.classe}</span>
-                          {eleve.date_naissance && (
-                            <>
-                              <span>•</span>
-                              <span>{format(new Date(eleve.date_naissance), 'dd/MM/yyyy')}</span>
-                            </>
-                          )}
-                          {eleve.adresse && (
-                            <>
-                              <span>•</span>
-                              <span className="flex items-center gap-1">
-                                <MapPin className="w-3 h-3" />
-                                {eleve.adresse}
-                              </span>
-                            </>
-                          )}
+              filteredDemandes.map((demande) => {
+                const desc = parseDescription(demande.description);
+                return (
+                  <div key={demande.id} className="p-6 hover:bg-amber-50/50 transition-colors">
+                    <div className="flex flex-col lg:flex-row justify-between gap-4">
+                      <div className="flex items-start gap-4 flex-1">
+                        <div className="w-14 h-14 rounded-2xl bg-blue-100 flex items-center justify-center flex-shrink-0">
+                          <User className="w-7 h-7 text-blue-500" />
                         </div>
-                        {eleve.tuteur && (
-                          <p className="text-sm text-gray-400 mt-1">
-                            Tuteur: {eleve.tuteur.prenom} {eleve.tuteur.nom} • {eleve.tuteur.telephone || eleve.tuteur.email}
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-gray-800 text-lg">
+                            {demande.eleve?.prenom || ''} {demande.eleve?.nom || 'N/A'}
+                          </h3>
+                          <div className="flex flex-wrap gap-2 mt-1 text-sm text-gray-500">
+                            {demande.eleve?.classe && <span>{demande.eleve.classe}</span>}
+                            {desc.zone && (
+                              <>
+                                <span>•</span>
+                                <span className="flex items-center gap-1">
+                                  <MapPin className="w-3 h-3" />
+                                  {desc.zone}
+                                </span>
+                              </>
+                            )}
+                            {desc.type_transport && (
+                              <>
+                                <span>•</span>
+                                <span>Transport: {desc.type_transport}</span>
+                              </>
+                            )}
+                            {desc.abonnement && (
+                              <>
+                                <span>•</span>
+                                <span>Abonnement: {desc.abonnement}</span>
+                              </>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-400 mt-2">
+                            {format(new Date(demande.date_creation), 'dd MMMM yyyy à HH:mm', { locale: fr })}
                           </p>
-                        )}
-                        {eleve.bus && (
-                          <p className="text-sm text-blue-600 mt-1 flex items-center gap-1">
-                            <Bus className="w-3 h-3" />
-                            Bus: {eleve.bus.numero}
-                          </p>
-                        )}
-                        {eleve.inscription && (
-                          <p className="text-xs text-gray-400 mt-1">
-                            Inscription du {format(new Date(eleve.inscription.date_inscription), 'dd/MM/yyyy')} • 
-                            {eleve.inscription.montant_mensuel} DH/mois
-                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-3">
+                        <span className={`px-4 py-2 rounded-xl text-sm font-medium ${getStatusBadge(demande.statut)}`}>
+                          {demande.statut}
+                        </span>
+
+                        {demande.statut === 'En attente' && (
+                          <>
+                            <Button
+                              onClick={() => handleViewDetails(demande)}
+                              className="bg-blue-500 hover:bg-blue-600 text-white rounded-xl"
+                            >
+                              <Eye className="w-4 h-4 mr-2" />
+                              Détails
+                            </Button>
+                            <Button
+                              onClick={() => {
+                                setSelectedDemande(demande);
+                                setShowRefuseModal(true);
+                              }}
+                              className="bg-red-500 hover:bg-red-600 text-white rounded-xl"
+                            >
+                              <XCircle className="w-4 h-4 mr-2" />
+                              Refuser
+                            </Button>
+                          </>
                         )}
                       </div>
-                    </div>
-
-                    <div className="flex flex-wrap items-center gap-3">
-                      <span className={`px-4 py-2 rounded-xl text-sm font-medium ${getStatusBadge(eleve.statut)}`}>
-                        {eleve.statut}
-                      </span>
-
-                      {eleve.statut === 'Inactif' && !eleve.inscription && (
-                        <>
-                          <Button
-                            onClick={() => handleValidate(eleve)}
-                            className="bg-green-500 hover:bg-green-600 text-white rounded-xl"
-                          >
-                            <CheckCircle className="w-4 h-4 mr-2" />
-                            Valider
-                          </Button>
-                          <Button
-                            onClick={() => {
-                              const motif = prompt('Motif du refus:');
-                              if (motif) handleRefuse(eleve, motif);
-                            }}
-                            className="bg-red-500 hover:bg-red-600 text-white rounded-xl"
-                          >
-                            <XCircle className="w-4 h-4 mr-2" />
-                            Refuser
-                          </Button>
-                        </>
-                      )}
-
-                      {eleve.statut === 'Actif' && eleve.inscription && !eleve.inscription.bus_id && (
-                        <Button
-                          onClick={() => handleVerifyZone(eleve)}
-                          className="bg-amber-500 hover:bg-amber-600 text-white rounded-xl"
-                        >
-                          <Bus className="w-4 h-4 mr-2" />
-                          Affecter un bus
-                        </Button>
-                      )}
                     </div>
                   </div>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </motion.div>
       </div>
 
-      {/* Modal Inscription Details */}
-      {showInscriptionModal && selectedEleve && (
+      {/* Modal Détails avec Bus Disponibles */}
+      {showDetailsModal && selectedDemande && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-3xl shadow-2xl max-w-lg w-full"
+            className="bg-white rounded-3xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto"
           >
-            <div className="p-6 border-b border-gray-100">
-              <h2 className="text-xl font-bold text-gray-800">
-                Valider l'inscription
+            <div className="p-6 border-b border-gray-100 sticky top-0 bg-white z-10">
+              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                <Info className="w-6 h-6 text-blue-500" />
+                Détails de la demande d'inscription
               </h2>
-              <p className="text-gray-500">
-                {selectedEleve.prenom} {selectedEleve.nom}
-              </p>
             </div>
 
-            <div className="p-6 space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  <Calendar className="w-4 h-4 inline mr-1" />
-                  Date de début
-                </label>
-                <Input
-                  type="date"
-                  value={inscriptionForm.date_debut}
-                  onChange={(e) => setInscriptionForm({...inscriptionForm, date_debut: e.target.value})}
-                  className="rounded-xl"
-                />
+            <div className="p-6 space-y-6">
+              {/* Informations élève */}
+              <div className="bg-blue-50 rounded-xl p-4">
+                <h3 className="font-semibold text-gray-800 mb-3">Informations de l'élève</h3>
+                {selectedDemande.eleve && (
+                  <div className="grid grid-cols-2 gap-3 text-sm">
+                    <div>
+                      <span className="text-gray-600">Nom complet:</span>
+                      <p className="font-medium">{selectedDemande.eleve.prenom} {selectedDemande.eleve.nom}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Classe:</span>
+                      <p className="font-medium">{selectedDemande.eleve.classe || 'N/A'}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-600">Adresse:</span>
+                      <p className="font-medium">{selectedDemande.eleve.adresse || 'N/A'}</p>
+                    </div>
+                    {selectedDemande.eleve.date_naissance && (
+                      <div>
+                        <span className="text-gray-600">Date de naissance:</span>
+                        <p className="font-medium">{format(new Date(selectedDemande.eleve.date_naissance), 'dd/MM/yyyy')}</p>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  <Calendar className="w-4 h-4 inline mr-1" />
-                  Date de fin
-                </label>
-                <Input
-                  type="date"
-                  value={inscriptionForm.date_fin}
-                  onChange={(e) => setInscriptionForm({...inscriptionForm, date_fin: e.target.value})}
-                  className="rounded-xl"
-                />
+              {/* Informations demande */}
+              <div className="bg-amber-50 rounded-xl p-4">
+                <h3 className="font-semibold text-gray-800 mb-3">Informations de la demande</h3>
+                {(() => {
+                  const desc = parseDescription(selectedDemande.description);
+                  return (
+                    <div className="grid grid-cols-2 gap-3 text-sm">
+                      {desc.type_transport && (
+                        <div>
+                          <span className="text-gray-600">Type de transport:</span>
+                          <p className="font-medium">{desc.type_transport}</p>
+                        </div>
+                      )}
+                      {desc.abonnement && (
+                        <div>
+                          <span className="text-gray-600">Abonnement:</span>
+                          <p className="font-medium">{desc.abonnement}</p>
+                        </div>
+                      )}
+                      {desc.groupe && (
+                        <div>
+                          <span className="text-gray-600">Groupe:</span>
+                          <p className="font-medium">{desc.groupe}</p>
+                        </div>
+                      )}
+                      {desc.zone && (
+                        <div>
+                          <span className="text-gray-600">Zone:</span>
+                          <p className="font-medium">{desc.zone}</p>
+                        </div>
+                      )}
+                      {desc.niveau && (
+                        <div>
+                          <span className="text-gray-600">Niveau:</span>
+                          <p className="font-medium">{desc.niveau}</p>
+                        </div>
+                      )}
+                      {desc.lien_parente && (
+                        <div>
+                          <span className="text-gray-600">Lien de parenté:</span>
+                          <p className="font-medium">{desc.lien_parente}</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
 
+              {/* Bus disponibles */}
+              <div>
+                <h3 className="font-semibold text-gray-800 mb-3 flex items-center gap-2">
+                  <Bus className="w-5 h-5 text-amber-500" />
+                  Bus disponibles pour cette zone
+                </h3>
+                {availableBuses.length === 0 ? (
+                  <div className="bg-gray-50 rounded-xl p-6 text-center text-gray-400">
+                    <Bus className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                    <p>Aucun bus disponible pour cette zone</p>
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {availableBuses.map((bus) => (
+                      <div 
+                        key={bus.id}
+                        className="p-4 rounded-xl border-2 border-gray-200 hover:border-amber-300 transition-colors"
+                      >
+                        <div className="flex justify-between items-center">
+                          <div className="flex-1">
+                            <h4 className="font-bold text-gray-800">{bus.numero}</h4>
+                            <p className="text-sm text-gray-500">{bus.marque} {bus.modele}</p>
+                            {bus.trajet && (
+                              <p className="text-sm text-gray-400">Trajet: {bus.trajet.nom}</p>
+                            )}
+                            <p className="text-xs text-gray-400 mt-1">
+                              Capacité: {bus.elevesInscrits}/{bus.capacite} • {bus.placesRestantes} places restantes
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Montant de la facture */}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Montant mensuel (DH)
+                  Montant de la facture (DH)
                 </label>
                 <Input
                   type="number"
-                  value={inscriptionForm.montant_mensuel}
-                  onChange={(e) => setInscriptionForm({...inscriptionForm, montant_mensuel: e.target.value})}
+                  value={montantFacture}
+                  onChange={(e) => setMontantFacture(parseFloat(e.target.value) || 500)}
                   className="rounded-xl"
                   min="0"
                   step="50"
@@ -504,110 +564,95 @@ export default function AdminInscriptions() {
               </div>
             </div>
 
-            <div className="p-6 border-t border-gray-100 flex gap-3 justify-end">
+            <div className="p-6 border-t border-gray-100 flex gap-3 justify-end sticky bottom-0 bg-white">
               <Button
                 variant="outline"
                 onClick={() => {
-                  setShowInscriptionModal(false);
-                  setSelectedEleve(null);
+                  setShowDetailsModal(false);
+                  setSelectedDemande(null);
+                  setMontantFacture(500);
                 }}
                 className="rounded-xl"
+                disabled={processing}
               >
                 Annuler
               </Button>
               <Button
-                onClick={handleCreateInscription}
+                onClick={handleValidate}
+                disabled={processing || availableBuses.length === 0}
                 className="bg-green-500 hover:bg-green-600 text-white rounded-xl"
               >
-                <CheckCircle className="w-4 h-4 mr-2" />
-                Valider l'inscription
+                {processing ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <CheckCircle className="w-4 h-4 mr-2" />
+                    Valider et créer la facture
+                  </>
+                )}
               </Button>
             </div>
           </motion.div>
         </div>
       )}
 
-      {/* Modal Affect Bus */}
-      {showVerifyModal && selectedEleve && (
+      {/* Modal Refus */}
+      {showRefuseModal && selectedDemande && (
         <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50 p-4">
           <motion.div
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
-            className="bg-white rounded-3xl shadow-2xl max-w-2xl w-full max-h-[80vh] overflow-y-auto"
+            className="bg-white rounded-3xl shadow-2xl max-w-lg w-full"
           >
             <div className="p-6 border-b border-gray-100">
-              <h2 className="text-xl font-bold text-gray-800">
-                Affectation de bus
+              <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                <XCircle className="w-6 h-6 text-red-500" />
+                Refuser la demande
               </h2>
-              <p className="text-gray-500">
-                Élève: {selectedEleve.prenom} {selectedEleve.nom}
+              <p className="text-gray-500 mt-1">
+                {selectedDemande.eleve?.prenom} {selectedDemande.eleve?.nom}
               </p>
-              {selectedEleve.adresse && (
-                <p className="text-sm text-gray-400 flex items-center gap-1 mt-1">
-                  <MapPin className="w-3 h-3" />
-                  {selectedEleve.adresse}
-                </p>
-              )}
             </div>
 
             <div className="p-6">
-              {availableBuses.length === 0 ? (
-                <div className="text-center py-8 text-gray-400">
-                  <Bus className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p>Aucun bus disponible</p>
-                  <p className="text-sm mt-1">Tous les bus sont pleins ou inactifs</p>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <p className="text-sm text-gray-600 mb-4">
-                    {availableBuses.length} bus disponible(s):
-                  </p>
-                  {availableBuses.map((bus) => (
-                    <div 
-                      key={bus.id}
-                      className="p-4 rounded-2xl border-2 border-gray-100 hover:border-amber-200 transition-colors"
-                    >
-                      <div className="flex justify-between items-center">
-                        <div className="flex-1">
-                          <h3 className="font-bold text-gray-800 text-lg">{bus.numero}</h3>
-                          <p className="text-sm text-gray-500">{bus.marque} {bus.modele}</p>
-                          <p className="text-sm text-gray-400">Trajet: {bus.trajet?.nom || 'Non assigné'}</p>
-                          <p className="text-xs text-gray-400 mt-1">
-                            Capacité: {bus.elevesInscrits}/{bus.capacite}
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className={`text-2xl font-bold ${
-                            bus.placesRestantes > 5 ? 'text-green-500' : 'text-orange-500'
-                          }`}>
-                            {bus.placesRestantes}
-                          </p>
-                          <p className="text-xs text-gray-400">places restantes</p>
-                          <Button
-                            onClick={() => handleAffectBus(bus.id)}
-                            className="mt-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl"
-                            size="sm"
-                          >
-                            Affecter
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Motif du refus (obligatoire)
+              </label>
+              <Textarea
+                value={motifRefus}
+                onChange={(e) => setMotifRefus(e.target.value)}
+                className="rounded-xl min-h-[120px]"
+                placeholder="Expliquez les raisons du refus..."
+                required
+              />
             </div>
 
-            <div className="p-6 border-t border-gray-100 flex justify-end">
+            <div className="p-6 border-t border-gray-100 flex gap-3 justify-end">
               <Button
                 variant="outline"
                 onClick={() => {
-                  setShowVerifyModal(false);
-                  setSelectedEleve(null);
+                  setShowRefuseModal(false);
+                  setSelectedDemande(null);
+                  setMotifRefus('');
                 }}
                 className="rounded-xl"
+                disabled={processing}
               >
-                Fermer
+                Annuler
+              </Button>
+              <Button
+                onClick={handleRefuse}
+                disabled={processing || !motifRefus.trim()}
+                className="bg-red-500 hover:bg-red-600 text-white rounded-xl"
+              >
+                {processing ? (
+                  <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                ) : (
+                  <>
+                    <XCircle className="w-4 h-4 mr-2" />
+                    Confirmer le refus
+                  </>
+                )}
               </Button>
             </div>
           </motion.div>

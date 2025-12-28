@@ -43,14 +43,17 @@ export default function AdminResponsables() {
     setLoading(true);
     setError(null);
     try {
-      const [responsablesData, busesData] = await Promise.all([
+      const [responsablesRes, busesRes] = await Promise.all([
         responsablesAPI.getAll(),
         busAPI.getAll()
       ]);
       
+      const responsablesData = responsablesRes?.data || responsablesRes || [];
+      const busesData = busesRes?.data || busesRes || [];
+      
       // Enrichir les responsables avec les infos des bus assignés
-      const responsablesEnrichis = responsablesData.map(r => {
-        const busAssignes = busesData.filter(b => b.responsable_id === r.id);
+      const responsablesEnrichis = (Array.isArray(responsablesData) ? responsablesData : []).map(r => {
+        const busAssignes = (Array.isArray(busesData) ? busesData : []).filter(b => b.responsable_id === r.id);
         return {
           ...r,
           buses: busAssignes

@@ -36,11 +36,12 @@ export default function AdminChauffeurs() {
     setLoading(true);
     setError(null);
     try {
-      const data = await chauffeursAPI.getAll();
-      setChauffeurs(data);
+      const response = await chauffeursAPI.getAll();
+      const data = response?.data || response || [];
+      setChauffeurs(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error('Erreur lors du chargement:', err);
-      setError('Erreur lors du chargement des chauffeurs');
+      setError('Erreur lors du chargement des chauffeurs: ' + (err.message || 'Erreur inconnue'));
     } finally {
       setLoading(false);
     }
@@ -68,7 +69,7 @@ export default function AdminChauffeurs() {
       await loadData();
     } catch (err) {
       console.error('Erreur lors de l\'enregistrement:', err);
-      setError('Erreur lors de l\'enregistrement du chauffeur');
+      setError('Erreur lors de l\'enregistrement du chauffeur: ' + (err.message || 'Erreur inconnue'));
     }
   };
 

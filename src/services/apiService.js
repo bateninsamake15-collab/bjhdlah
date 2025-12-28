@@ -28,6 +28,25 @@ const fetchAPI = async (endpoint, options = {}) => {
     
     const response = await fetch(url, config);
     
+    // Vérifier si la réponse est OK avant de parser
+    if (!response.ok) {
+      // Essayer de lire le message d'erreur
+      let errorData;
+      try {
+        const text = await response.text();
+        try {
+          errorData = JSON.parse(text);
+        } catch {
+          errorData = { message: text || `Erreur HTTP ${response.status}` };
+        }
+      } catch {
+        errorData = { message: `Erreur HTTP ${response.status}` };
+      }
+      
+      console.error(`[API] Error ${response.status}:`, errorData);
+      throw new Error(errorData.message || `Erreur ${response.status}: Erreur lors de la requête`);
+    }
+    
     // Try to parse JSON response
     let data;
     const contentType = response.headers.get('content-type');
@@ -46,21 +65,23 @@ const fetchAPI = async (endpoint, options = {}) => {
       throw new Error(text || 'Erreur lors de la requête');
     }
 
-    if (!response.ok) {
-      console.error(`[API] Error ${response.status}:`, data);
-      throw new Error(data.message || `Erreur ${response.status}: Erreur lors de la requête`);
-    }
-
     console.log('[API] Success:', data);
     return data;
   } catch (error) {
     // Gestion spécifique des erreurs réseau
-    if (error.name === 'TypeError' && error.message.includes('fetch')) {
+    if (error.name === 'TypeError' && (error.message.includes('fetch') || error.message.includes('Failed to fetch') || error.message.includes('NetworkError'))) {
       console.error('[API] Network Error:', error);
       throw new Error(`Impossible de se connecter au serveur. Vérifiez que:
 1. XAMPP Apache est démarré
 2. Le backend est dans C:\\xampp\\htdocs\\backend
-3. L'URL ${API_BASE_URL} est accessible dans votre navigateur`);
+3. L'URL ${API_BASE_URL} est accessible dans votre navigateur
+4. Vérifiez la console du navigateur (F12) pour plus de détails`);
+    }
+    
+    // Gestion des erreurs CORS
+    if (error.message && error.message.includes('CORS')) {
+      console.error('[API] CORS Error:', error);
+      throw new Error('Erreur CORS. Vérifiez que les headers CORS sont correctement configurés dans le backend.');
     }
     
     // If it's already an Error with a message, rethrow it
@@ -319,7 +340,7 @@ export const demandesAPI = {
   }),
   traiter: (id, statut, commentaire) => fetchAPI('/demandes/traiter.php', {
     method: 'PUT',
-    body: JSON.stringify({ id, statut, commentaire }),
+    body: JSON.stringify({ id, statut, commentaire: commentaire || null }),
   }),
 };
 
@@ -353,6 +374,23 @@ export const paiementsAPI = {
     body: JSON.stringify(data),
   }),
   getImpaye: () => fetchAPI('/paiements/getImpaye.php'),
+};
+
+// ============================================
+// FACTURES
+// ============================================
+
+export const facturesAPI = {
+  create: (data) => fetchAPI('/factures/create.php', {
+    method: 'POST',
+    body: JSON.stringify(data),
+  }),
+  getByCode: (code) => fetchAPI(`/factures/getByCode.php?code=${code}`),
+  getByDemande: (demandeId) => fetchAPI(`/factures/getByDemande.php?demande_id=${demandeId}`),
+  validerPaiement: (codeVerification) => fetchAPI('/factures/validerPaiement.php', {
+    method: 'PUT',
+    body: JSON.stringify({ code_verification: codeVerification }),
+  }),
 };
 
 // ============================================

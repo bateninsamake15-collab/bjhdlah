@@ -23,6 +23,7 @@ try {
     $stmt = $pdo->prepare('
         UPDATE demandes 
         SET statut = ?, 
+            commentaire = ?,
             date_traitement = NOW(),
             traite_par = ?
         WHERE id = ?
@@ -30,6 +31,7 @@ try {
     
     $stmt->execute([
         $data['statut'],
+        $data['commentaire'] ?? null,
         $data['traite_par'] ?? null,
         $data['id']
     ]);

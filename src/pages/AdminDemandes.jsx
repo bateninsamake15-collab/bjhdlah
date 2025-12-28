@@ -7,7 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { 
-  FileText, ArrowLeft, CheckCircle, XCircle, Calendar, User
+  FileText, ArrowLeft, CheckCircle, XCircle, Calendar, User, Info
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { fr } from 'date-fns/locale';
@@ -21,6 +21,7 @@ export default function AdminDemandes() {
   const [reponse, setReponse] = useState('');
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState(null);
+  const [showMoreInfo, setShowMoreInfo] = useState(null);
 
   useEffect(() => {
     const session = localStorage.getItem('admin_session');
@@ -53,18 +54,30 @@ export default function AdminDemandes() {
     
     try {
       // Traiter la demande
-      await demandesAPI.traiter(selectedDemande.id, 'Approuvée', reponse || 'Demande approuvée');
+      const commentaireText = reponse || 'Demande approuvée';
+      await demandesAPI.traiter(selectedDemande.id, 'Approuvée', commentaireText);
       
       // Si augmentation, mettre à jour le salaire
       if (selectedDemande.type_demande === 'Augmentation' && nouveauSalaire) {
-        if (selectedDemande.demandeur_type === 'chauffeur') {
-          await chauffeursAPI.update(selectedDemande.demandeur_id, {
-            salaire: parseInt(nouveauSalaire)
-          });
-        } else if (selectedDemande.demandeur_type === 'responsable') {
-          await responsablesAPI.update(selectedDemande.demandeur_id, {
-            salaire: parseInt(nouveauSalaire)
-          });
+        const demandeurId = selectedDemande.demandeur_id || selectedDemande.tuteur_id;
+        const demandeurType = selectedDemande.demandeur_type || 'tuteur';
+        
+        if (demandeurType === 'chauffeur' && demandeurId) {
+          try {
+            await chauffeursAPI.update(demandeurId, {
+              salaire: parseInt(nouveauSalaire)
+            });
+          } catch (err) {
+            console.error('Erreur lors de la mise à jour du salaire du chauffeur:', err);
+          }
+        } else if (demandeurType === 'responsable' && demandeurId) {
+          try {
+            await responsablesAPI.update(demandeurId, {
+              salaire: parseInt(nouveauSalaire)
+            });
+          } catch (err) {
+            console.error('Erreur lors de la mise à jour du salaire du responsable:', err);
+          }
         }
       }
       
@@ -82,17 +95,22 @@ export default function AdminDemandes() {
       }
       
       // Envoyer notification
-      await notificationsAPI.create({
-        destinataire_id: selectedDemande.demandeur_id,
-        destinataire_type: selectedDemande.demandeur_type,
-        titre: 'Demande acceptée',
-        message: `Votre demande de ${selectedDemande.type_demande.toLowerCase()} a été acceptée.${
-          selectedDemande.type_demande === 'Augmentation' && nouveauSalaire 
-            ? ` Nouveau salaire: ${nouveauSalaire} DH` 
-            : ''
-        }`,
-        type: 'info'
-      });
+      const demandeurId = selectedDemande.demandeur_id || selectedDemande.tuteur_id;
+      const demandeurType = selectedDemande.demandeur_type || 'tuteur';
+      
+      if (demandeurId) {
+        await notificationsAPI.create({
+          destinataire_id: demandeurId,
+          destinataire_type: demandeurType,
+          titre: 'Demande acceptée',
+          message: `Votre demande de ${selectedDemande.type_demande.toLowerCase()} a été acceptée.${
+            selectedDemande.type_demande === 'Augmentation' && nouveauSalaire 
+              ? ` Nouveau salaire: ${nouveauSalaire} DH` 
+              : ''
+          }`,
+          type: 'info'
+        });
+      }
       
       setSelectedDemande(null);
       setNouveauSalaire('');
@@ -115,13 +133,18 @@ export default function AdminDemandes() {
       await demandesAPI.traiter(selectedDemande.id, 'Rejetée', reponse);
       
       // Envoyer notification
-      await notificationsAPI.create({
-        destinataire_id: selectedDemande.demandeur_id,
-        destinataire_type: selectedDemande.demandeur_type,
-        titre: 'Demande refusée',
-        message: `Votre demande de ${selectedDemande.type_demande.toLowerCase()} a été refusée. Motif: ${reponse}`,
-        type: 'alerte'
-      });
+      const demandeurId = selectedDemande.demandeur_id || selectedDemande.tuteur_id;
+      const demandeurType = selectedDemande.demandeur_type || 'tuteur';
+      
+      if (demandeurId) {
+        await notificationsAPI.create({
+          destinataire_id: demandeurId,
+          destinataire_type: demandeurType,
+          titre: 'Demande refusée',
+          message: `Votre demande de ${selectedDemande.type_demande.toLowerCase()} a été refusée. Motif: ${reponse}`,
+          type: 'alerte'
+        });
+      }
       
       setSelectedDemande(null);
       setReponse('');
@@ -148,9 +171,39 @@ export default function AdminDemandes() {
       'Augmentation': 'bg-purple-100 text-purple-700',
       'Congé': 'bg-blue-100 text-blue-700',
       'Déménagement': 'bg-amber-100 text-amber-700',
+      'inscription': 'bg-blue-100 text-blue-700',
       'Autre': 'bg-gray-100 text-gray-700'
     };
     return styles[type] || 'bg-gray-100 text-gray-700';
+  };
+
+  const parseDescription = (description) => {
+    if (!description) return null;
+    try {
+      if (typeof description === 'string') {
+        const parsed = JSON.parse(description);
+        return parsed;
+      }
+      return description;
+    } catch (e) {
+      return null;
+    }
+  };
+
+  const getDescriptionFields = (demande) => {
+    const desc = parseDescription(demande.description);
+    if (!desc || typeof desc !== 'object') return null;
+    
+    const fields = {};
+    if (desc.type_transport) fields['Type de transport'] = desc.type_transport;
+    if (desc.abonnement) fields['Abonnement'] = desc.abonnement;
+    if (desc.groupe) fields['Groupe'] = desc.groupe;
+    if (desc.adresse) fields['Adresse'] = desc.adresse;
+    if (desc.zone) fields['Zone'] = desc.zone;
+    if (desc.niveau) fields['Niveau'] = desc.niveau;
+    if (desc.lien_parente) fields['Lien de parenté'] = desc.lien_parente;
+    
+    return Object.keys(fields).length > 0 ? fields : null;
   };
 
   if (loading) {
@@ -206,8 +259,8 @@ export default function AdminDemandes() {
                           <User className="w-5 h-5 text-gray-500" />
                         </div>
                         <div>
-                          <h3 className="font-bold text-gray-800">{demande.demandeur_nom}</h3>
-                          <p className="text-sm text-gray-500 capitalize">{demande.demandeur_type}</p>
+                          <h3 className="font-bold text-gray-800">{demande.demandeur_nom || `${demande.tuteur_prenom || ''} ${demande.tuteur_nom || ''}`.trim() || 'Utilisateur'}</h3>
+                          <p className="text-sm text-gray-500 capitalize">{demande.demandeur_type || 'tuteur'}</p>
                         </div>
                       </div>
                       
@@ -279,10 +332,31 @@ export default function AdminDemandes() {
                         </p>
                       )}
 
-                      {demande.description && !demande.raisons && (
-                        <p className="text-gray-600 text-sm bg-gray-50 rounded-xl p-3 mt-2">
-                          <strong>Description:</strong> {typeof demande.description === 'string' ? demande.description : JSON.stringify(demande.description)}
-                        </p>
+                      {getDescriptionFields(demande) && (
+                        <div className="mt-2">
+                          <Button
+                            variant="outline"
+                            onClick={() => setShowMoreInfo(showMoreInfo === demande.id ? null : demande.id)}
+                            className="text-sm rounded-xl"
+                            size="sm"
+                          >
+                            <Info className="w-4 h-4 mr-2" />
+                            Plus d'infos
+                          </Button>
+                          {showMoreInfo === demande.id && (
+                            <div className="mt-2 bg-blue-50 rounded-xl p-4 border border-blue-100">
+                              <h4 className="font-semibold text-blue-900 mb-3">Informations supplémentaires</h4>
+                              <div className="grid grid-cols-2 gap-3 text-sm">
+                                {Object.entries(getDescriptionFields(demande)).map(([key, value]) => (
+                                  <div key={key}>
+                                    <span className="text-blue-700 font-medium">{key}:</span>
+                                    <span className="ml-2 text-gray-700">{value}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
 
                       {demande.commentaire && (

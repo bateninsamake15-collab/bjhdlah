@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { createPageUrl } from '../utils';
-import { elevesAPI, notificationsAPI, presencesAPI, demandesAPI } from '../services/apiService';
+import { elevesAPI, notificationsAPI, presencesAPI, demandesAPI, inscriptionsAPI } from '../services/apiService';
 import { motion } from 'framer-motion';
 import { Button } from "@/components/ui/button";
 import { 
@@ -43,7 +43,34 @@ export default function TuteurDashboard() {
       // Charger les élèves du tuteur
       const allElevesResponse = await elevesAPI.getAll();
       const allEleves = allElevesResponse?.data || allElevesResponse || [];
-      const elevesData = allEleves.filter(e => e.tuteur_id === tuteurId);
+      let elevesData = allEleves.filter(e => e.tuteur_id === tuteurId);
+      
+      // Charger les demandes d'inscription pour déterminer le statut réel
+      try {
+        const demandesResponse = await demandesAPI.getAll();
+        const allDemandes = demandesResponse?.data || demandesResponse || [];
+        
+        // Enrichir les élèves avec le statut de leur demande d'inscription
+        elevesData = elevesData.map(eleve => {
+          // Trouver la demande d'inscription pour cet élève
+          const demandeInscription = allDemandes.find(d => 
+            d.type_demande === 'inscription' && d.eleve_id === eleve.id
+          );
+          
+          // Si la demande est refusée, utiliser "Refusé" comme statut
+          if (demandeInscription && demandeInscription.statut === 'Rejetée') {
+            return {
+              ...eleve,
+              statut: 'Refusé',
+              demandeInscription
+            };
+          }
+          
+          return eleve;
+        });
+      } catch (err) {
+        console.warn('Erreur lors du chargement des demandes:', err);
+      }
       
       // Charger les notifications
       const notificationsResponse = await notificationsAPI.getByUser(tuteurId, 'tuteur');
@@ -108,7 +135,7 @@ export default function TuteurDashboard() {
   const filteredEleves = eleves.filter(e => {
     if (inscriptionFilter === 'all') return true;
     if (inscriptionFilter === 'inscrit') return e.statut === 'Actif';
-    if (inscriptionFilter === 'non_inscrit') return e.statut === 'Inactif';
+    if (inscriptionFilter === 'non_inscrit') return e.statut === 'Inactif' || e.statut === 'Refusé';
     return true;
   });
 
@@ -185,10 +212,10 @@ export default function TuteurDashboard() {
             color="amber"
           />
           <StatCard 
-            title="Inactifs" 
-            value={eleves.filter(e => e.statut === 'Inactif').length} 
+            title="Refusés" 
+            value={eleves.filter(e => e.statut === 'Refusé').length} 
             icon={Clock} 
-            color="orange"
+            color="red"
           />
           <StatCard 
             title="Actifs" 
@@ -240,7 +267,7 @@ export default function TuteurDashboard() {
                 <SelectContent>
                   <SelectItem value="all">Tous les élèves</SelectItem>
                   <SelectItem value="inscrit">Inscrits (Actifs)</SelectItem>
-                  <SelectItem value="non_inscrit">Non inscrits (Inactifs)</SelectItem>
+                  <SelectItem value="non_inscrit">Non inscrits / Refusés</SelectItem>
                 </SelectContent>
               </Select>
             </div>

@@ -51,12 +51,14 @@ export default function ChauffeurDashboard() {
   }, [navigate]);
 
   const loadData = async (chauffeurData) => {
+    setLoading(true);
     try {
       // Récupérer tous les bus
-      const allBuses = await busAPI.getAll();
+      const busesRes = await busAPI.getAll();
+      const allBuses = busesRes?.data || busesRes || [];
       
       // Trouver le bus assigné à ce chauffeur
-      const chauffeurBus = allBuses.find(b => b.chauffeur_id === chauffeurData.id);
+      const chauffeurBus = Array.isArray(allBuses) ? allBuses.find(b => b.chauffeur_id === chauffeurData.id) : null;
       
       if (chauffeurBus) {
         setBus(chauffeurBus);
@@ -64,7 +66,8 @@ export default function ChauffeurDashboard() {
         // Charger le trajet
         if (chauffeurBus.trajet_id) {
           try {
-            const trajetData = await trajetsAPI.getById(chauffeurBus.trajet_id);
+            const trajetRes = await trajetsAPI.getById(chauffeurBus.trajet_id);
+            const trajetData = trajetRes?.data || trajetRes;
             setTrajet(trajetData);
           } catch (err) {
             console.error('Erreur chargement trajet:', err);
@@ -74,7 +77,8 @@ export default function ChauffeurDashboard() {
         // Charger le responsable
         if (chauffeurBus.responsable_id) {
           try {
-            const responsableData = await responsablesAPI.getById(chauffeurBus.responsable_id);
+            const responsableRes = await responsablesAPI.getById(chauffeurBus.responsable_id);
+            const responsableData = responsableRes?.data || responsableRes;
             setResponsable(responsableData);
           } catch (err) {
             console.error('Erreur chargement responsable:', err);
@@ -83,8 +87,9 @@ export default function ChauffeurDashboard() {
         
         // Charger les élèves du bus
         try {
-          const elevesData = await elevesAPI.getByBus(chauffeurBus.id);
-          setEleves(elevesData);
+          const elevesRes = await elevesAPI.getByBus(chauffeurBus.id);
+          const elevesData = elevesRes?.data || elevesRes || [];
+          setEleves(Array.isArray(elevesData) ? elevesData : []);
         } catch (err) {
           console.error('Erreur chargement élèves:', err);
         }
@@ -92,16 +97,18 @@ export default function ChauffeurDashboard() {
       
       // Charger les accidents du chauffeur
       try {
-        const accidentsData = await accidentsAPI.getByChauffeur(chauffeurData.id);
-        setAccidents(accidentsData);
+        const accidentsRes = await accidentsAPI.getByChauffeur(chauffeurData.id);
+        const accidentsData = accidentsRes?.data || accidentsRes || [];
+        setAccidents(Array.isArray(accidentsData) ? accidentsData : []);
       } catch (err) {
         console.error('Erreur chargement accidents:', err);
       }
       
       // Charger les présences (pour la date sélectionnée)
       try {
-        const presencesData = await presencesAPI.getByDate(selectedDate);
-        setPresences(presencesData);
+        const presencesRes = await presencesAPI.getByDate(selectedDate);
+        const presencesData = presencesRes?.data || presencesRes || [];
+        setPresences(Array.isArray(presencesData) ? presencesData : []);
       } catch (err) {
         console.error('Erreur chargement présences:', err);
       }
@@ -110,14 +117,15 @@ export default function ChauffeurDashboard() {
       try {
         const notificationsResponse = await notificationsAPI.getByUser(chauffeurData.id, 'chauffeur');
         const notificationsData = notificationsResponse?.data || notificationsResponse || [];
-        setNotifications(notificationsData.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)));
+        setNotifications(Array.isArray(notificationsData) ? notificationsData.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)) : []);
       } catch (err) {
         console.error('Erreur chargement notifications:', err);
       }
     } catch (err) {
       console.error('Erreur générale:', err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   // Recharger les présences quand la date change

@@ -1,24 +1,27 @@
 import React, { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { createPageUrl } from '../utils';
-import { elevesAPI, paiementsAPI, notificationsAPI } from '../services/apiService';
+import { facturesAPI, notificationsAPI } from '../services/apiService';
 import { motion } from 'framer-motion';
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { 
   CreditCard, ArrowLeft, CheckCircle, AlertCircle,
-  GraduationCap, Bus, Calendar
+  GraduationCap, Bus, Calendar, FileText
 } from 'lucide-react';
 
 export default function TuteurPaiement() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [loading, setLoading] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState(false);
-  const [eleve, setEleve] = useState(null);
   const [tuteur, setTuteur] = useState(null);
+  const [facture, setFacture] = useState(null);
   const [codeValidation, setCodeValidation] = useState('');
+  const [factureId, setFactureId] = useState(null);
 
   useEffect(() => {
     const session = localStorage.getItem('tuteur_session');
@@ -26,100 +29,131 @@ export default function TuteurPaiement() {
       navigate(createPageUrl('TuteurLogin'));
       return;
     }
-    setTuteur(JSON.parse(session));
+    const tuteurData = JSON.parse(session);
+    setTuteur(tuteurData);
     
-    const params = new URLSearchParams(window.location.search);
-    const eleveId = params.get('eleveId');
-    if (eleveId) {
-      loadEleve(eleveId);
+    // Vérifier si un code est fourni dans l'URL
+    const codeFromUrl = searchParams.get('code');
+    if (codeFromUrl) {
+      setCodeValidation(codeFromUrl);
+      // La vérification sera faite après que le tuteur soit chargé
     }
-  }, [navigate]);
+  }, [navigate, searchParams]);
 
-  const loadEleve = async (eleveId) => {
+  // Vérifier le code une fois le tuteur chargé
+  useEffect(() => {
+    if (tuteur && codeValidation && !facture && !validating) {
+      handleVerifyCode(codeValidation);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tuteur]);
+
+  const handleVerifyCode = async (code) => {
+    if (!code || code.length < 4) {
+      setError('Code de vérification invalide');
+      return;
+    }
+    
+    setValidating(true);
+    setError('');
+    
     try {
-      const eleveData = await elevesAPI.getById(eleveId);
-      setEleve(eleveData);
+      const response = await facturesAPI.getByCode(code);
+      
+      if (response.success && response.data) {
+        const factureData = response.data;
+        
+        // Vérifier que la facture appartient au tuteur connecté (si le tuteur est chargé)
+        if (tuteur && factureData.tuteur_id && factureData.tuteur_id !== tuteur.id) {
+          setError('Cette facture ne vous appartient pas');
+          setFacture(null);
+        } else {
+          setFacture(factureData);
+          setFactureId(factureData.id);
+        }
+      } else {
+        setError('Code de vérification invalide ou facture déjà payée');
+        setFacture(null);
+      }
     } catch (err) {
-      console.error('Erreur lors du chargement de l\'élève:', err);
-      setError('Impossible de charger les informations de l\'élève');
+      console.error('Erreur lors de la vérification:', err);
+      setError('Erreur lors de la vérification du code. Veuillez réessayer.');
+      setFacture(null);
+    } finally {
+      setValidating(false);
     }
-  };
-
-  const calculateAmount = () => {
-    if (!eleve) return 0;
-    const basePrice = eleve.type_transport === 'Aller-Retour' ? 400 : 250;
-    return eleve.abonnement === 'Annuel' ? basePrice * 10 : basePrice;
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    setError('');
     
-    // Simple code validation (in real app, this would be server-side)
+    if (!facture || !codeValidation) {
+      setError('Veuillez d\'abord vérifier votre code de vérification');
+      return;
+    }
+    
     if (codeValidation.length < 4) {
       setError('Code de validation invalide');
       return;
     }
     
     setLoading(true);
+    setError('');
     
     try {
-      const currentDate = new Date();
-      const mois = currentDate.getMonth() + 1;
-      const annee = currentDate.getFullYear();
+      // Valider le paiement avec le code (l'API sélectionnera automatiquement un bus)
+      const response = await facturesAPI.validerPaiement(codeValidation);
       
-      // Create payment record
-      await paiementsAPI.create({
-        eleve_id: eleve.id,
-        tuteur_id: tuteur.id,
-        montant: calculateAmount(),
-        mois: mois,
-        annee: annee,
-        date_paiement: currentDate.toISOString().split('T')[0],
-        mode_paiement: 'Virement',
-        statut: 'Payé'
-      });
-      
-      // Update eleve status
-      await elevesAPI.update(eleve.id, {
-        statut: 'Actif'
-      });
-      
-      // Notify tuteur
-      await notificationsAPI.create({
-        destinataire_id: tuteur.id,
-        destinataire_type: 'tuteur',
-        titre: 'Paiement confirmé',
-        message: `Votre paiement de ${calculateAmount()} DH pour ${eleve.prenom} a été confirmé. L'affectation au bus sera effectuée par l'administration.`,
-        type: 'info',
-        date: new Date().toISOString()
-      });
-      
-      // Notify admin (assuming admin has ID 1 or fetch from users table with role='admin')
-      await notificationsAPI.create({
-        destinataire_id: 1, // You may need to fetch actual admin ID
-        destinataire_type: 'admin',
-        titre: 'Paiement reçu',
-        message: `Le paiement pour ${eleve.prenom} ${eleve.nom} a été validé. Montant: ${calculateAmount()} DH`,
-        type: 'info',
-        date: new Date().toISOString()
-      });
-      
-      setSuccess(true);
-      setTimeout(() => {
-        navigate(createPageUrl('TuteurDashboard'));
-      }, 2000);
+      if (response.success) {
+        // Notifier le tuteur
+        if (tuteur) {
+          await notificationsAPI.create({
+            destinataire_id: tuteur.id,
+            destinataire_type: 'tuteur',
+            titre: 'Paiement confirmé',
+            message: `Votre paiement de ${facture.montant} DH pour ${facture.eleve_prenom} ${facture.eleve_nom} a été confirmé. L'élève a été affecté au bus ${response.data?.bus_numero || 'assigné'}.`,
+            type: 'info',
+            date: new Date().toISOString()
+          });
+        }
+        
+        setSuccess(true);
+        setTimeout(() => {
+          navigate(createPageUrl('TuteurDashboard'));
+        }, 3000);
+      } else {
+        setError(response.message || 'Erreur lors de la validation du paiement');
+      }
     } catch (err) {
       console.error('Erreur lors du paiement:', err);
       setError('Erreur lors du paiement. Veuillez réessayer.');
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
-  if (!eleve) {
+  if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <div className="w-12 h-12 border-4 border-amber-500 border-t-transparent rounded-full animate-spin" />
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-amber-50 via-white to-yellow-50 p-4">
+        <motion.div
+          initial={{ opacity: 0, scale: 0.9 }}
+          animate={{ opacity: 1, scale: 1 }}
+          className="bg-white rounded-3xl shadow-xl p-12 text-center max-w-md w-full"
+        >
+          <motion.div
+            initial={{ scale: 0 }}
+            animate={{ scale: 1 }}
+            transition={{ delay: 0.2, type: "spring" }}
+            className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6"
+          >
+            <CheckCircle className="w-10 h-10 text-green-500" />
+          </motion.div>
+          <h2 className="text-2xl font-bold text-gray-800 mb-2">Paiement réussi !</h2>
+          <p className="text-gray-500 mb-4">
+            Votre paiement a été confirmé et l'inscription a été validée.
+          </p>
+          <p className="text-sm text-gray-400">Redirection vers le tableau de bord...</p>
+        </motion.div>
       </div>
     );
   }
@@ -142,113 +176,157 @@ export default function TuteurPaiement() {
             </button>
             <h1 className="text-2xl font-bold text-white flex items-center gap-3">
               <CreditCard className="w-7 h-7" />
-              Paiement
+              Validation du paiement
             </h1>
           </div>
 
-          {success ? (
-            <div className="p-12 text-center">
-              <motion.div
-                initial={{ scale: 0 }}
-                animate={{ scale: 1 }}
-                className="w-20 h-20 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6"
-              >
-                <CheckCircle className="w-10 h-10 text-green-500" />
-              </motion.div>
-              <h2 className="text-2xl font-bold text-gray-800 mb-2">Paiement réussi !</h2>
-              <p className="text-gray-500">Redirection vers le tableau de bord...</p>
-            </div>
-          ) : (
-            <div className="p-6">
-              {/* Eleve Info */}
-              <div className="bg-gray-50 rounded-2xl p-6 mb-6">
-                <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                  <GraduationCap className="w-5 h-5 text-amber-500" />
-                  Informations de l'élève
-                </h3>
-                <div className="grid grid-cols-2 gap-4 text-sm">
-                  <div>
-                    <span className="text-gray-500">Nom complet:</span>
-                    <p className="font-medium">{eleve.nom} {eleve.prenom}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Classe:</span>
-                    <p className="font-medium">{eleve.classe}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Zone:</span>
-                    <p className="font-medium">{eleve.zone || 'Non définie'}</p>
-                  </div>
-                  <div>
-                    <span className="text-gray-500">Statut:</span>
-                    <p className="font-medium">{eleve.statut}</p>
-                  </div>
-                </div>
-              </div>
-
-              {/* Payment Info */}
-              <div className="bg-amber-50 rounded-2xl p-6 mb-6 border border-amber-100">
-                <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
-                  <Bus className="w-5 h-5 text-amber-500" />
-                  Détails du paiement
-                </h3>
-                <div className="space-y-3">
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Type de transport:</span>
-                    <span className="font-medium">{eleve.type_transport || 'Aller-Retour'}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-gray-600">Abonnement:</span>
-                    <span className="font-medium">{eleve.abonnement || 'Mensuel'}</span>
-                  </div>
-                  <div className="border-t border-amber-200 pt-3 flex justify-between">
-                    <span className="text-lg font-semibold text-gray-800">Total à payer:</span>
-                    <span className="text-2xl font-bold text-amber-600">{calculateAmount()} DH</span>
-                  </div>
-                </div>
-              </div>
-
-              {error && (
-                <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-red-600">
-                  <AlertCircle className="w-5 h-5" />
-                  {error}
-                </div>
-              )}
-
-              <form onSubmit={handleSubmit} className="space-y-5">
-                <div>
-                  <Label className="text-gray-700 font-medium">
-                    Code de validation (fourni par l'école)
-                  </Label>
-                  <Input
-                    value={codeValidation}
-                    onChange={(e) => setCodeValidation(e.target.value)}
-                    placeholder="Entrez le code de validation"
-                    className="mt-1 h-12 rounded-xl text-center text-2xl tracking-widest font-mono"
-                    required
-                  />
-                  <p className="text-sm text-gray-500 mt-2">
-                    Ce code vous a été communiqué par l'administration de l'école
+          <div className="p-6">
+            {!facture ? (
+              <>
+                {/* Étape 1: Vérification du code */}
+                <div className="mb-6">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-blue-500" />
+                    Étape 1: Vérifier votre code de facture
+                  </h3>
+                  <p className="text-sm text-gray-600 mb-4">
+                    Entrez le code de vérification fourni par l'école après le paiement de votre facture.
                   </p>
                 </div>
 
-                <Button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full h-14 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white rounded-xl font-semibold text-lg shadow-lg"
-                >
-                  {loading ? (
-                    <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  ) : (
-                    <>
-                      <CreditCard className="w-5 h-5 mr-2" />
-                      Confirmer le paiement
-                    </>
-                  )}
-                </Button>
-              </form>
-            </div>
-          )}
+                <div className="bg-blue-50 rounded-xl p-6 mb-6 border border-blue-100">
+                  <Label className="text-gray-700 font-medium mb-2 block">
+                    Code de vérification
+                  </Label>
+                  <div className="flex gap-3">
+                    <Input
+                      value={codeValidation}
+                      onChange={(e) => setCodeValidation(e.target.value.toUpperCase())}
+                      placeholder="Entrez le code (ex: ABC12345)"
+                      className="h-12 rounded-xl text-center text-xl tracking-widest font-mono flex-1"
+                      maxLength={20}
+                    />
+                    <Button
+                      type="button"
+                      onClick={() => handleVerifyCode(codeValidation)}
+                      disabled={validating || !codeValidation || codeValidation.length < 4}
+                      className="bg-blue-500 hover:bg-blue-600 text-white rounded-xl h-12 px-6"
+                    >
+                      {validating ? (
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        'Vérifier'
+                      )}
+                    </Button>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Ce code vous a été communiqué après le paiement de votre facture à l'école
+                  </p>
+                </div>
+
+                {error && (
+                  <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-red-600">
+                    <AlertCircle className="w-5 h-5" />
+                    {error}
+                  </div>
+                )}
+              </>
+            ) : (
+              <>
+                {/* Étape 2: Affichage de la facture et confirmation */}
+                <div className="mb-6">
+                  <div className="bg-green-50 rounded-xl p-4 mb-4 border border-green-200 flex items-center gap-2">
+                    <CheckCircle className="w-5 h-5 text-green-500" />
+                    <span className="text-green-700 font-medium">Code vérifié avec succès</span>
+                  </div>
+                  
+                  <h3 className="text-lg font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                    <FileText className="w-5 h-5 text-green-500" />
+                    Détails de la facture
+                  </h3>
+                </div>
+
+                {/* Informations élève */}
+                <div className="bg-gray-50 rounded-xl p-6 mb-6">
+                  <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                    <GraduationCap className="w-5 h-5 text-amber-500" />
+                    Informations de l'élève
+                  </h3>
+                  <div className="grid grid-cols-2 gap-4 text-sm">
+                    <div>
+                      <span className="text-gray-500">Nom complet:</span>
+                      <p className="font-medium">{facture.eleve_prenom} {facture.eleve_nom}</p>
+                    </div>
+                    <div>
+                      <span className="text-gray-500">Classe:</span>
+                      <p className="font-medium">{facture.classe || 'N/A'}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Détails du paiement */}
+                <div className="bg-amber-50 rounded-xl p-6 mb-6 border border-amber-100">
+                  <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
+                    <Bus className="w-5 h-5 text-amber-500" />
+                    Détails de la facture
+                  </h3>
+                  <div className="space-y-3">
+                    {facture.type_transport && (
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Type de transport:</span>
+                        <span className="font-medium">{facture.type_transport}</span>
+                      </div>
+                    )}
+                    <div className="border-t border-amber-200 pt-3 flex justify-between">
+                      <span className="text-lg font-semibold text-gray-800">Montant:</span>
+                      <span className="text-2xl font-bold text-amber-600">{facture.montant} DH</span>
+                    </div>
+                    {facture.date_creation && (
+                      <div className="flex justify-between text-sm text-gray-500">
+                        <span>Date de création:</span>
+                        <span>{new Date(facture.date_creation).toLocaleDateString('fr-FR')}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {error && (
+                  <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-xl flex items-center gap-2 text-red-600">
+                    <AlertCircle className="w-5 h-5" />
+                    {error}
+                  </div>
+                )}
+
+                <form onSubmit={handleSubmit} className="space-y-5">
+                  <div className="bg-blue-50 rounded-xl p-4 border border-blue-100">
+                    <Label className="text-gray-700 font-medium mb-2 block">
+                      Code de vérification (confirmé)
+                    </Label>
+                    <Input
+                      value={codeValidation}
+                      readOnly
+                      className="h-12 rounded-xl text-center text-xl tracking-widest font-mono bg-white"
+                    />
+                  </div>
+
+                  <Button
+                    type="submit"
+                    disabled={loading}
+                    className="w-full h-14 bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white rounded-xl font-semibold text-lg shadow-lg"
+                  >
+                    {loading ? (
+                      <div className="w-6 h-6 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <>
+                        <CreditCard className="w-5 h-5 mr-2" />
+                        Confirmer le paiement
+                      </>
+                    )}
+                  </Button>
+                </form>
+              </>
+            )}
+          </div>
         </motion.div>
       </div>
     </div>

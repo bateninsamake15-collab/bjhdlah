@@ -71,6 +71,7 @@ export default function AdminStats() {
   }, [periodePreset]);
 
   const loadData = async () => {
+    setLoading(true);
     try {
       const [elevesRes, paiementsRes, accidentsRes, busesRes, inscriptionsRes] = await Promise.all([
         elevesAPI.getAll(),
@@ -81,18 +82,18 @@ export default function AdminStats() {
       ]);
       
       // Extraire les données avec gestion de différents formats de réponse
-      const eleves = elevesRes?.data || elevesRes || [];
-      const paiements = paiementsRes?.data || paiementsRes || [];
-      const accidents = accidentsRes?.data || accidentsRes || [];
-      const buses = busesRes?.data || busesRes || [];
-      const inscriptions = inscriptionsRes?.data || inscriptionsRes || [];
+      const eleves = Array.isArray(elevesRes?.data) ? elevesRes.data : (Array.isArray(elevesRes) ? elevesRes : []);
+      const paiements = Array.isArray(paiementsRes?.data) ? paiementsRes.data : (Array.isArray(paiementsRes) ? paiementsRes : []);
+      const accidents = Array.isArray(accidentsRes?.data) ? accidentsRes.data : (Array.isArray(accidentsRes) ? accidentsRes : []);
+      const buses = Array.isArray(busesRes?.data) ? busesRes.data : (Array.isArray(busesRes) ? busesRes : []);
+      const inscriptions = Array.isArray(inscriptionsRes?.data) ? inscriptionsRes.data : (Array.isArray(inscriptionsRes) ? inscriptionsRes : []);
       
       // Note: presencesAPI n'est pas dans le SQL d'origine, 
       // vous devrez peut-être créer une table presences ou utiliser une autre logique
       let presences = [];
       try {
         const presencesRes = await presencesAPI.getByDate(new Date().toISOString().split('T')[0]);
-        presences = presencesRes?.data || presencesRes || [];
+        presences = Array.isArray(presencesRes?.data) ? presencesRes.data : (Array.isArray(presencesRes) ? presencesRes : []);
       } catch (err) {
         console.warn('Présences non disponibles:', err);
       }
@@ -100,8 +101,9 @@ export default function AdminStats() {
       setData({ eleves, presences, paiements, accidents, inscriptions, buses });
     } catch (err) {
       console.error('Erreur lors du chargement des statistiques:', err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const filterByDate = (items, dateField = 'date') => {

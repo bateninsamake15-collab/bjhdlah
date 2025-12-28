@@ -48,18 +48,22 @@ export default function AdminAccidents() {
     setLoading(true);
     setError(null);
     try {
-      const [accidentsData, busesData, chauffeursData] = await Promise.all([
+      const [accidentsRes, busesRes, chauffeursRes] = await Promise.all([
         accidentsAPI.getAll(),
         busAPI.getAll(),
         chauffeursAPI.getAll()
       ]);
       
-      setAccidents(accidentsData.sort((a, b) => new Date(b.date) - new Date(a.date)));
-      setBuses(busesData);
-      setChauffeurs(chauffeursData);
+      const accidentsData = accidentsRes?.data || accidentsRes || [];
+      const busesData = busesRes?.data || busesRes || [];
+      const chauffeursData = chauffeursRes?.data || chauffeursRes || [];
+      
+      setAccidents(Array.isArray(accidentsData) ? accidentsData.sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0)) : []);
+      setBuses(Array.isArray(busesData) ? busesData : []);
+      setChauffeurs(Array.isArray(chauffeursData) ? chauffeursData : []);
     } catch (err) {
       console.error('Erreur lors du chargement:', err);
-      setError('Erreur lors du chargement des données');
+      setError('Erreur lors du chargement des données: ' + (err.message || 'Erreur inconnue'));
     } finally {
       setLoading(false);
     }

@@ -49,20 +49,25 @@ export default function AdminBus() {
     setLoading(true);
     setError(null);
     try {
-      const [busesData, trajetsData, chauffeursData, responsablesData] = await Promise.all([
+      const [busesRes, trajetsRes, chauffeursRes, responsablesRes] = await Promise.all([
         busAPI.getAll(),
         trajetsAPI.getAll(),
         chauffeursAPI.getAll(),
         responsablesAPI.getAll()
       ]);
       
-      setBuses(busesData);
-      setTrajets(trajetsData);
-      setChauffeurs(chauffeursData);
-      setResponsables(responsablesData);
+      const busesData = busesRes?.data || busesRes || [];
+      const trajetsData = trajetsRes?.data || trajetsRes || [];
+      const chauffeursData = chauffeursRes?.data || chauffeursRes || [];
+      const responsablesData = responsablesRes?.data || responsablesRes || [];
+      
+      setBuses(Array.isArray(busesData) ? busesData : []);
+      setTrajets(Array.isArray(trajetsData) ? trajetsData : []);
+      setChauffeurs(Array.isArray(chauffeursData) ? chauffeursData : []);
+      setResponsables(Array.isArray(responsablesData) ? responsablesData : []);
     } catch (err) {
       console.error('Erreur lors du chargement:', err);
-      setError('Erreur lors du chargement des données');
+      setError('Erreur lors du chargement des données: ' + (err.message || 'Erreur inconnue'));
     } finally {
       setLoading(false);
     }
@@ -91,7 +96,7 @@ export default function AdminBus() {
       await loadData();
     } catch (err) {
       console.error('Erreur lors de l\'enregistrement:', err);
-      setError('Erreur lors de l\'enregistrement du bus');
+      setError('Erreur lors de l\'enregistrement du bus: ' + (err.message || 'Erreur inconnue'));
     }
   };
 
@@ -115,7 +120,7 @@ export default function AdminBus() {
       await loadData();
     } catch (err) {
       console.error('Erreur lors de l\'enregistrement:', err);
-      setError('Erreur lors de l\'enregistrement du trajet');
+      setError('Erreur lors de l\'enregistrement du trajet: ' + (err.message || 'Erreur inconnue'));
     }
   };
 
@@ -126,7 +131,7 @@ export default function AdminBus() {
         await loadData();
       } catch (err) {
         console.error('Erreur lors de la suppression:', err);
-        setError('Erreur lors de la suppression du bus');
+        setError('Erreur lors de la suppression du bus: ' + (err.message || 'Erreur inconnue'));
       }
     }
   };
@@ -138,7 +143,7 @@ export default function AdminBus() {
         await loadData();
       } catch (err) {
         console.error('Erreur lors de la suppression:', err);
-        setError('Erreur lors de la suppression du trajet');
+        setError('Erreur lors de la suppression du trajet: ' + (err.message || 'Erreur inconnue'));
       }
     }
   };
@@ -223,7 +228,7 @@ export default function AdminBus() {
             onClick={() => setActiveTab('trajets')}
             className={`rounded-xl ${activeTab === 'trajets' ? 'bg-amber-500 hover:bg-amber-600' : ''}`}
           >
-            <Route className="w-4 h-4 mr-2" />
+            <Navigation className="w-4 h-4 mr-2" />
             Trajets ({trajets.length})
           </Button>
         </div>
@@ -400,7 +405,7 @@ export default function AdminBus() {
           >
             <div className="p-6 border-b border-gray-100 flex justify-between items-center">
               <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
-                <Route className="w-6 h-6 text-amber-500" />
+                <Navigation className="w-6 h-6 text-amber-500" />
                 Gestion des Trajets
               </h2>
               <Button
@@ -532,7 +537,21 @@ export default function AdminBus() {
 
             <div className="divide-y divide-gray-100">
               {trajets.map((trajet) => {
-                const zonesArray = Array.isArray(trajet.zones) ? trajet.zones : [];
+                let zonesArray = [];
+                if (trajet.zones) {
+                  if (typeof trajet.zones === 'string') {
+                    try {
+                      zonesArray = JSON.parse(trajet.zones);
+                      if (!Array.isArray(zonesArray)) {
+                        zonesArray = trajet.zones.split(',').map(z => z.trim());
+                      }
+                    } catch {
+                      zonesArray = trajet.zones.split(',').map(z => z.trim());
+                    }
+                  } else if (Array.isArray(trajet.zones)) {
+                    zonesArray = trajet.zones;
+                  }
+                }
                 
                 return (
                   <div key={trajet.id} className="p-6 hover:bg-amber-50/50 transition-colors">
@@ -574,7 +593,7 @@ export default function AdminBus() {
               })}
               {trajets.length === 0 && (
                 <div className="p-12 text-center text-gray-400">
-                  <Route className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <Navigation className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>Aucun trajet enregistré</p>
                 </div>
               )}

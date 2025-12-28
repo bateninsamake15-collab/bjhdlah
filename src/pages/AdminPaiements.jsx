@@ -19,6 +19,7 @@ export default function AdminPaiements() {
   const [tuteurs, setTuteurs] = useState([]);
   const [inscriptions, setInscriptions] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [dateFilter, setDateFilter] = useState('');
@@ -33,19 +34,26 @@ export default function AdminPaiements() {
   }, [navigate]);
 
   const loadData = async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const [paiementsData, elevesData, tuteursData, inscriptionsData] = await Promise.all([
+      const [paiementsRes, elevesRes, tuteursRes, inscriptionsRes] = await Promise.all([
         paiementsAPI.getAll(),
         elevesAPI.getAll(),
         tuteursAPI.getAll(),
         inscriptionsAPI.getAll()
       ]);
       
+      const paiementsData = paiementsRes?.data || paiementsRes || [];
+      const elevesData = elevesRes?.data || elevesRes || [];
+      const tuteursData = tuteursRes?.data || tuteursRes || [];
+      const inscriptionsData = inscriptionsRes?.data || inscriptionsRes || [];
+      
       // Enrichir les paiements avec les infos élève et tuteur
-      const paiementsEnrichis = paiementsData.map(p => {
-        const inscription = inscriptionsData.find(i => i.id === p.inscription_id);
-        const eleve = inscription ? elevesData.find(e => e.id === inscription.eleve_id) : null;
-        const tuteur = eleve ? tuteursData.find(t => t.id === eleve.tuteur_id) : null;
+      const paiementsEnrichis = (Array.isArray(paiementsData) ? paiementsData : []).map(p => {
+        const inscription = (Array.isArray(inscriptionsData) ? inscriptionsData : []).find(i => i.id === p.inscription_id);
+        const eleve = inscription ? (Array.isArray(elevesData) ? elevesData : []).find(e => e.id === inscription.eleve_id) : null;
+        const tuteur = eleve ? (Array.isArray(tuteursData) ? tuteursData : []).find(t => t.id === eleve.tuteur_id) : null;
         
         return {
           ...p,
@@ -55,14 +63,16 @@ export default function AdminPaiements() {
         };
       });
       
-      setPaiements(paiementsEnrichis.sort((a, b) => new Date(b.date_paiement) - new Date(a.date_paiement)));
-      setEleves(elevesData);
-      setTuteurs(tuteursData);
-      setInscriptions(inscriptionsData);
+      setPaiements(paiementsEnrichis.sort((a, b) => new Date(b.date_paiement || 0) - new Date(a.date_paiement || 0)));
+      setEleves(Array.isArray(elevesData) ? elevesData : []);
+      setTuteurs(Array.isArray(tuteursData) ? tuteursData : []);
+      setInscriptions(Array.isArray(inscriptionsData) ? inscriptionsData : []);
     } catch (err) {
       console.error('Erreur lors du chargement des paiements:', err);
+      setError('Erreur lors du chargement des données: ' + (err.message || 'Erreur inconnue'));
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   const filteredPaiements = paiements.filter(p => {
@@ -119,6 +129,13 @@ export default function AdminPaiements() {
           <ArrowLeft className="w-4 h-4" />
           Retour
         </button>
+
+        {error && (
+          <div className="mb-6 bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-xl flex items-center justify-between">
+            <span>{error}</span>
+            <button onClick={() => setError(null)} className="text-red-500 hover:text-red-700">×</button>
+          </div>
+        )}
 
         {/* Summary Card */}
         <motion.div
